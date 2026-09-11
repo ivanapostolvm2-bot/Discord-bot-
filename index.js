@@ -1,3 +1,6 @@
+const http = require('http');
+http.createServer((req, res) => res.end('OK')).listen(process.env.PORT || 3000);
+
 const { 
   Client, 
   GatewayIntentBits, 
@@ -24,7 +27,6 @@ const client = new Client({
   partials: [Partials.Message, Partials.Channel]
 });
 
-// Базова памет (за рестарти се препоръчва външна база като MongoDB или Quick.db)
 const warnings = new Map();
 const activeGiveaways = new Map();
 let ticketChannelId = null;
@@ -97,7 +99,6 @@ const commands = [
     )
     .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers),
 
-  // Последната дискутирана команда за ограничаване на канал
   new SlashCommandBuilder()
     .setName('set-ticket-channel')
     .setDescription('Задава канал, в който се позволява само /ticket open')
@@ -105,7 +106,6 @@ const commands = [
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
 ].map(c => c.toJSON());
 
-// Стартиране и регистриране на командите
 client.once('ready', async () => {
   console.log(`Вписан като ${client.user.tag}`);
   const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
@@ -117,7 +117,6 @@ client.once('ready', async () => {
   }
 });
 
-// Защита на канала за тикети срещу спам и обикновен текст
 client.on('messageCreate', async (message) => {
   if (message.author.bot || !ticketChannelId) return;
   if (message.channel.id === ticketChannelId) {
@@ -131,7 +130,6 @@ client.on('messageCreate', async (message) => {
   }
 });
 
-// Обработка на команди и бутони
 client.on('interactionCreate', async (interaction) => {
   if (interaction.isChatInputCommand()) {
     const { commandName, options, guild, member, channel } = interaction;
@@ -192,7 +190,7 @@ client.on('interactionCreate', async (interaction) => {
     if (commandName === 'set-ticket-channel') {
       const targetChan = options.getChannel('channel');
       ticketChannelId = targetChan.id;
-      return interaction.reply({ content: `Каналът ${targetChan} вече е зададен само за билети. Обикновен текст в него ще се трие автоматично!`, ephemeral: true });
+      return interaction.reply({ content: `Каналът ${targetChan} вече приема само тикети. Обикновеният текст ще се трие автоматично!`, ephemeral: true });
     }
 
     if (commandName === 'setup-verify') {
@@ -208,7 +206,6 @@ client.on('interactionCreate', async (interaction) => {
     if (commandName === 'giveaway') {
       const prize = options.getString('prize');
       const mins = options.getInteger('duration');
-      const endsAt = Date.now() + mins * 60000;
       const gId = `${Date.now()}`;
       activeGiveaways.set(gId, []);
 
@@ -216,7 +213,7 @@ client.on('interactionCreate', async (interaction) => {
         new ButtonBuilder().setCustomId(`giveaway_${gId}`).setLabel('🎉 Участвай').setStyle(ButtonStyle.Primary)
       );
       const embed = new EmbedBuilder().setTitle(`🎉 Giveaway: ${prize}`).setDescription(`Натиснете бутона за участие!\nВреме: ${mins} мин.`).setColor(0xFEE75C);
-      const gMsg = await channel.send({ embeds: [embed], components: [row] });
+      await channel.send({ embeds: [embed], components: [row] });
       await interaction.reply({ content: 'Giveaway е пуснат!', ephemeral: true });
 
       setTimeout(async () => {
@@ -279,10 +276,20 @@ client.on('interactionCreate', async (interaction) => {
         await interaction.reply('Тикетът ще бъде затворен...');
         return channel.delete();
       }
+      if (sub === 'setup') {
+        const row = new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId('open_ticket_btn').setLabel('📩 Отвори билет').setStyle(ButtonStyle.Primary)
+        );
+        const embed = new EmbedBuilder()
+          .setTitle('Център за помощ')
+          .setDescription('Ако имате въпрос или проблем, натиснете бутона по-долу, за да отворите частен тикет.')
+          .setColor(0x5865F2);
+        await channel.send({ embeds: [embed], components: [row] });
+        return interaction.reply({ content: 'Панелът за тикети е изпратен!', ephemeral: true });
+      }
     }
   }
 
-  // Обработка на бутони
   if (interaction.isButton()) {
     if (interaction.customId.startsWith('verify_')) {
       const roleId = interaction.customId.split('_')[1];
@@ -305,6 +312,22 @@ client.on('interactionCreate', async (interaction) => {
       }
     }
 
+    if (interaction.customId === 'open_ticket_btn') {
+      const tChannel = await interaction.guild.channels.create({
+        name: `ticket-${interaction.user.username}`,
+        type: ChannelType.GuildText,
+        permissionOverwrites: [
+          { id: interaction.guild.id, deny: [PermissionsBitField.Flags.ViewChannel] },
+          { id: interaction.user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] }
+        ]
+      });
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('close_ticket').setLabel('Затвори тикет').setStyle(ButtonStyle.Danger)
+      );
+      await tChannel.send({ content: `${interaction.user}, опишете вашия въпрос тук.`, components: [row] });
+      return interaction.reply({ content: `Тикетът е създаден: ${tChannel}`, ephemeral: true });
+    }
+
     if (interaction.customId === 'close_ticket') {
       await interaction.reply('Каналът се изтрива...');
       return interaction.channel.delete();
@@ -313,3 +336,4 @@ client.on('interactionCreate', async (interaction) => {
 });
 
 client.login(process.env.DISCORD_TOKEN);
+          
