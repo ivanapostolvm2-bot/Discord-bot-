@@ -1,5 +1,13 @@
 const http = require('http');
-http.createServer((req, res) => res.end('OK')).listen(process.env.PORT || 3000);
+
+// HTTP сървър за изискванията на Render Web Service
+const PORT = process.env.PORT || 3000;
+http.createServer((req, res) => {
+  res.writeHead(200, { 'Content-Type': 'text/plain' });
+  res.end('Bot is running and healthy!');
+}).listen(PORT, () => {
+  console.log(`HTTP сървърът слуша на порт ${PORT}`);
+});
 
 const { 
   Client, 
@@ -14,7 +22,8 @@ const {
   ButtonStyle, 
   ChannelType, 
   PermissionsBitField,
-  EmbedBuilder 
+  EmbedBuilder,
+  Events
 } = require('discord.js');
 
 const client = new Client({
@@ -106,234 +115,244 @@ const commands = [
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
 ].map(c => c.toJSON());
 
-client.once('ready', async () => {
-  console.log(`Вписан като ${client.user.tag}`);
+// Регистриране на команди при стартиране
+client.once(Events.ClientReady, async (c) => {
+  console.log(`Вписан успешно като: ${c.user.tag}`);
   const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
   try {
-    await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
+    console.log('Започва обновяване на глобалните slash команди...');
+    await rest.put(Routes.applicationCommands(c.user.id), { body: commands });
     console.log('Slash командите са регистрирани успешно!');
   } catch (err) {
-    console.error(err);
+    console.error('Грешка при регистриране на команди:', err);
   }
 });
 
-client.on('messageCreate', async (message) => {
+// Защита на специалния канал срещу обикновени съобщения
+client.on(Events.MessageCreate, async (message) => {
   if (message.author.bot || !ticketChannelId) return;
   if (message.channel.id === ticketChannelId) {
     try {
       await message.delete();
       const warnMsg = await message.channel.send({
-        content: `${message.author}, в този канал е забранен обикновеният чат! Използвайте само \`/ticket open\`.`
+        content: `${message.author}, в този канал е забранен обикновеният чат! Използвайте само командата \`/ticket open\`.`
       });
       setTimeout(() => warnMsg.delete().catch(() => {}), 4000);
-    } catch (e) {}
+    } catch (e) {
+      console.error('Грешка при изтриване на съобщение:', e);
+    }
   }
 });
 
-client.on('interactionCreate', async (interaction) => {
-  if (interaction.isChatInputCommand()) {
-    const { commandName, options, guild, member, channel } = interaction;
+// Обработка на взаимодействия (slash команди и бутони)
+client.on(Events.InteractionCreate, async (interaction) => {
+  try {
+    if (interaction.isChatInputCommand()) {
+      const { commandName, options, guild, member, channel } = interaction;
 
-    if (commandName === 'ping') {
-      return interaction.reply(`Pong! 🏓 Забавяне: ${client.ws.ping}ms`);
-    }
+      if (commandName === 'ping') {
+        return interaction.reply(`Pong! 🏓 Забавяне: ${client.ws.ping}ms`);
+      }
 
-    if (commandName === 'about') {
-      return interaction.reply({
-        embeds: [new EmbedBuilder().setTitle('За бота').setDescription('Многофункционален бот за управление на сървъра.').setColor(0x00AE86)]
-      });
-    }
+      if (commandName === 'about') {
+        return interaction.reply({
+          embeds: [new EmbedBuilder().setTitle('За бота').setDescription('Многофункционален бот за управление на сървъра.').setColor(0x00AE86)]
+        });
+      }
 
-    if (commandName === 'serverinfo') {
-      return interaction.reply({
-        embeds: [
-          new EmbedBuilder()
-            .setTitle(guild.name)
-            .setThumbnail(guild.iconURL())
-            .addFields(
-              { name: 'Членове', value: `${guild.memberCount}`, inline: true },
-              { name: 'Канали', value: `${guild.channels.cache.size}`, inline: true },
-              { name: 'Роли', value: `${guild.roles.cache.size}`, inline: true }
-            )
-            .setColor(0x5865F2)
-        ]
-      });
-    }
+      if (commandName === 'serverinfo') {
+        return interaction.reply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle(guild.name)
+              .setThumbnail(guild.iconURL())
+              .addFields(
+                { name: 'Членове', value: `${guild.memberCount}`, inline: true },
+                { name: 'Канали', value: `${guild.channels.cache.size}`, inline: true },
+                { name: 'Роли', value: `${guild.roles.cache.size}`, inline: true }
+              )
+              .setColor(0x5865F2)
+          ]
+        });
+      }
 
-    if (commandName === 'clear') {
-      const amount = options.getInteger('amount');
-      if (amount < 1 || amount > 100) return interaction.reply({ content: 'Въведете число между 1 и 100.', ephemeral: true });
-      await channel.bulkDelete(amount, true);
-      return interaction.reply({ content: `Изтрити ${amount} съобщения.`, ephemeral: true });
-    }
+      if (commandName === 'clear') {
+        const amount = options.getInteger('amount');
+        if (amount < 1 || amount > 100) return interaction.reply({ content: 'Въведете число между 1 и 100.', ephemeral: true });
+        await channel.bulkDelete(amount, true);
+        return interaction.reply({ content: `Изтрити ${amount} съобщения.`, ephemeral: true });
+      }
 
-    if (commandName === 'embed') {
-      const title = options.getString('title');
-      const desc = options.getString('description');
-      const color = options.getString('color') || '#5865F2';
-      const embed = new EmbedBuilder().setTitle(title).setDescription(desc).setColor(color);
-      await channel.send({ embeds: [embed] });
-      return interaction.reply({ content: 'Embed съобщението е изпратено!', ephemeral: true });
-    }
+      if (commandName === 'embed') {
+        const title = options.getString('title');
+        const desc = options.getString('description');
+        const color = options.getString('color') || '#5865F2';
+        const embed = new EmbedBuilder().setTitle(title).setDescription(desc).setColor(color);
+        await channel.send({ embeds: [embed] });
+        return interaction.reply({ content: 'Embed съобщението е изпратено!', ephemeral: true });
+      }
 
-    if (commandName === 'poll') {
-      const q = options.getString('question');
-      const o1 = options.getString('option1');
-      const o2 = options.getString('option2');
-      const embed = new EmbedBuilder().setTitle(`📊 Анкета: ${q}`).setDescription(`1️⃣ ${o1}\n2️⃣ ${o2}`).setColor(0x00FF88);
-      const pollMsg = await channel.send({ embeds: [embed] });
-      await pollMsg.react('1️⃣');
-      await pollMsg.react('2️⃣');
-      return interaction.reply({ content: 'Анкетата е създадена!', ephemeral: true });
-    }
+      if (commandName === 'poll') {
+        const q = options.getString('question');
+        const o1 = options.getString('option1');
+        const o2 = options.getString('option2');
+        const embed = new EmbedBuilder().setTitle(`📊 Анкета: ${q}`).setDescription(`1️⃣ ${o1}\n2️⃣ ${o2}`).setColor(0x00FF88);
+        const pollMsg = await channel.send({ embeds: [embed] });
+        await pollMsg.react('1️⃣');
+        await pollMsg.react('2️⃣');
+        return interaction.reply({ content: 'Анкетата е създадена!', ephemeral: true });
+      }
 
-    if (commandName === 'set-ticket-channel') {
-      const targetChan = options.getChannel('channel');
-      ticketChannelId = targetChan.id;
-      return interaction.reply({ content: `Каналът ${targetChan} вече приема само тикети. Обикновеният текст ще се трие автоматично!`, ephemeral: true });
-    }
+      if (commandName === 'set-ticket-channel') {
+        const targetChan = options.getChannel('channel');
+        ticketChannelId = targetChan.id;
+        return interaction.reply({ content: `Каналът ${targetChan} вече приема само тикети. Обикновеният текст в него ще се трие автоматично!`, ephemeral: true });
+      }
 
-    if (commandName === 'setup-verify') {
-      const role = options.getRole('role');
-      const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(`verify_${role.id}`).setLabel('Потвърди').setStyle(ButtonStyle.Success)
-      );
-      const embed = new EmbedBuilder().setTitle('Верификация').setDescription('Натиснете бутона отдолу за достъп до сървъра.').setColor(0x57F287);
-      await channel.send({ embeds: [embed], components: [row] });
-      return interaction.reply({ content: 'Панелът за верификация е настроен!', ephemeral: true });
-    }
+      if (commandName === 'setup-verify') {
+        const role = options.getRole('role');
+        const row = new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId(`verify_${role.id}`).setLabel('Потвърди').setStyle(ButtonStyle.Success)
+        );
+        const embed = new EmbedBuilder().setTitle('Верификация').setDescription('Натиснете бутона отдолу за достъп до сървъра.').setColor(0x57F287);
+        await channel.send({ embeds: [embed], components: [row] });
+        return interaction.reply({ content: 'Панелът за верификация е настроен!', ephemeral: true });
+      }
 
-    if (commandName === 'giveaway') {
-      const prize = options.getString('prize');
-      const mins = options.getInteger('duration');
-      const gId = `${Date.now()}`;
-      activeGiveaways.set(gId, []);
+      if (commandName === 'giveaway') {
+        const prize = options.getString('prize');
+        const mins = options.getInteger('duration');
+        const gId = `${Date.now()}`;
+        activeGiveaways.set(gId, []);
 
-      const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(`giveaway_${gId}`).setLabel('🎉 Участвай').setStyle(ButtonStyle.Primary)
-      );
-      const embed = new EmbedBuilder().setTitle(`🎉 Giveaway: ${prize}`).setDescription(`Натиснете бутона за участие!\nВреме: ${mins} мин.`).setColor(0xFEE75C);
-      await channel.send({ embeds: [embed], components: [row] });
-      await interaction.reply({ content: 'Giveaway е пуснат!', ephemeral: true });
+        const row = new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId(`giveaway_${gId}`).setLabel('🎉 Участвай').setStyle(ButtonStyle.Primary)
+        );
+        const embed = new EmbedBuilder().setTitle(`🎉 Giveaway: ${prize}`).setDescription(`Натиснете бутона за участие!\nВреме: ${mins} мин.`).setColor(0xFEE75C);
+        await channel.send({ embeds: [embed], components: [row] });
+        await interaction.reply({ content: 'Giveaway е пуснат!', ephemeral: true });
 
-      setTimeout(async () => {
-        const entries = activeGiveaways.get(gId) || [];
-        if (entries.length === 0) {
-          await channel.send(`🎉 Giveaway за **${prize}** приключи! Няма участници.`);
-        } else {
-          const winnerId = entries[Math.floor(Math.random() * entries.length)];
-          await channel.send(`🎉 Честито на <@${winnerId}>! Печелиш **${prize}**!`);
+        setTimeout(async () => {
+          const entries = activeGiveaways.get(gId) || [];
+          if (entries.length === 0) {
+            await channel.send(`🎉 Giveaway за **${prize}** приключи! Няма участници.`);
+          } else {
+            const winnerId = entries[Math.floor(Math.random() * entries.length)];
+            await channel.send(`🎉 Честито на <@${winnerId}>! Печелиш **${prize}**!`);
+          }
+          activeGiveaways.delete(gId);
+        }, mins * 60000);
+      }
+
+      if (commandName === 'warn') {
+        const sub = options.getSubcommand();
+        const target = options.getUser('user');
+        if (!warnings.has(target.id)) warnings.set(target.id, []);
+
+        if (sub === 'add') {
+          const reason = options.getString('reason');
+          warnings.get(target.id).push(reason);
+          return interaction.reply({ content: `Предупреждение добавено на ${target.tag}: ${reason}` });
         }
-        activeGiveaways.delete(gId);
-      }, mins * 60000);
-    }
-
-    if (commandName === 'warn') {
-      const sub = options.getSubcommand();
-      const target = options.getUser('user');
-      if (!warnings.has(target.id)) warnings.set(target.id, []);
-
-      if (sub === 'add') {
-        const reason = options.getString('reason');
-        warnings.get(target.id).push(reason);
-        return interaction.reply({ content: `Предупреждение добавено на ${target.tag}: ${reason}` });
-      }
-      if (sub === 'list') {
-        const userWarns = warnings.get(target.id);
-        if (!userWarns.length) return interaction.reply({ content: `${target.tag} няма предупреждения.`, ephemeral: true });
-        return interaction.reply({ content: `Предупреждения за ${target.tag}:\n${userWarns.map((w, i) => `${i + 1}. ${w}`).join('\n')}` });
-      }
-      if (sub === 'remove') {
-        const idx = options.getInteger('index') - 1;
-        const userWarns = warnings.get(target.id);
-        if (idx >= 0 && idx < userWarns.length) {
-          userWarns.splice(idx, 1);
-          return interaction.reply({ content: `Предупреждението е премахнато.` });
+        if (sub === 'list') {
+          const userWarns = warnings.get(target.id);
+          if (!userWarns.length) return interaction.reply({ content: `${target.tag} няма предупреждения.`, ephemeral: true });
+          return interaction.reply({ content: `Предупреждения за ${target.tag}:\n${userWarns.map((w, i) => `${i + 1}. ${w}`).join('\n')}` });
         }
-        return interaction.reply({ content: 'Невалиден номер.', ephemeral: true });
+        if (sub === 'remove') {
+          const idx = options.getInteger('index') - 1;
+          const userWarns = warnings.get(target.id);
+          if (idx >= 0 && idx < userWarns.length) {
+            userWarns.splice(idx, 1);
+            return interaction.reply({ content: `Предупреждението е премахнато.` });
+          }
+          return interaction.reply({ content: 'Невалиден номер на предупреждение.', ephemeral: true });
+        }
+      }
+
+      if (commandName === 'ticket') {
+        const sub = options.getSubcommand();
+        if (sub === 'open') {
+          const tChannel = await guild.channels.create({
+            name: `ticket-${member.user.username}`,
+            type: ChannelType.GuildText,
+            permissionOverwrites: [
+              { id: guild.id, deny: [PermissionsBitField.Flags.ViewChannel] },
+              { id: member.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] }
+            ]
+          });
+          const row = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('close_ticket').setLabel('Затвори тикет').setStyle(ButtonStyle.Danger)
+          );
+          await tChannel.send({ content: `${member}, опишете вашия въпрос тук. Администратор ще ви отговори скоро.`, components: [row] });
+          return interaction.reply({ content: `Тикетът е създаден: ${tChannel}`, ephemeral: true });
+        }
+        if (sub === 'close') {
+          if (!channel.name.startsWith('ticket-')) return interaction.reply({ content: 'Тази команда може да се ползва само в канал за тикет!', ephemeral: true });
+          await interaction.reply('Тикетът ще бъде затворен след момент...');
+          return channel.delete();
+        }
+        if (sub === 'setup') {
+          const row = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('open_ticket_btn').setLabel('📩 Отвори билет').setStyle(ButtonStyle.Primary)
+          );
+          const embed = new EmbedBuilder()
+            .setTitle('Център за помощ')
+            .setDescription('Ако имате въпрос или проблем, натиснете бутона по-долу, за да отворите частен тикет.')
+            .setColor(0x5865F2);
+          await channel.send({ embeds: [embed], components: [row] });
+          return interaction.reply({ content: 'Панелът за тикети е изпратен успешно!', ephemeral: true });
+        }
       }
     }
 
-    if (commandName === 'ticket') {
-      const sub = options.getSubcommand();
-      if (sub === 'open') {
-        const tChannel = await guild.channels.create({
-          name: `ticket-${member.user.username}`,
+    if (interaction.isButton()) {
+      if (interaction.customId.startsWith('verify_')) {
+        const roleId = interaction.customId.split('_')[1];
+        const role = interaction.guild.roles.cache.get(roleId);
+        if (role) {
+          await interaction.member.roles.add(role);
+          return interaction.reply({ content: 'Успешна верификация!', ephemeral: true });
+        }
+      }
+
+      if (interaction.customId.startsWith('giveaway_')) {
+        const gId = interaction.customId.split('_')[1];
+        const list = activeGiveaways.get(gId);
+        if (list) {
+          if (list.includes(interaction.user.id)) {
+            return interaction.reply({ content: 'Вече участвате!', ephemeral: true });
+          }
+          list.push(interaction.user.id);
+          return interaction.reply({ content: 'Успешно се записахте за giveaway-а!', ephemeral: true });
+        }
+      }
+
+      if (interaction.customId === 'open_ticket_btn') {
+        const tChannel = await interaction.guild.channels.create({
+          name: `ticket-${interaction.user.username}`,
           type: ChannelType.GuildText,
           permissionOverwrites: [
-            { id: guild.id, deny: [PermissionsBitField.Flags.ViewChannel] },
-            { id: member.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] }
+            { id: interaction.guild.id, deny: [PermissionsBitField.Flags.ViewChannel] },
+            { id: interaction.user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] }
           ]
         });
         const row = new ActionRowBuilder().addComponents(
           new ButtonBuilder().setCustomId('close_ticket').setLabel('Затвори тикет').setStyle(ButtonStyle.Danger)
         );
-        await tChannel.send({ content: `${member}, опишете вашия въпрос тук.`, components: [row] });
+        await tChannel.send({ content: `${interaction.user}, опишете вашия въпрос тук.`, components: [row] });
         return interaction.reply({ content: `Тикетът е създаден: ${tChannel}`, ephemeral: true });
       }
-      if (sub === 'close') {
-        if (!channel.name.startsWith('ticket-')) return interaction.reply({ content: 'Тази команда може да се ползва само в канал за тикет!', ephemeral: true });
-        await interaction.reply('Тикетът ще бъде затворен...');
-        return channel.delete();
-      }
-      if (sub === 'setup') {
-        const row = new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setCustomId('open_ticket_btn').setLabel('📩 Отвори билет').setStyle(ButtonStyle.Primary)
-        );
-        const embed = new EmbedBuilder()
-          .setTitle('Център за помощ')
-          .setDescription('Ако имате въпрос или проблем, натиснете бутона по-долу, за да отворите частен тикет.')
-          .setColor(0x5865F2);
-        await channel.send({ embeds: [embed], components: [row] });
-        return interaction.reply({ content: 'Панелът за тикети е изпратен!', ephemeral: true });
+
+      if (interaction.customId === 'close_ticket') {
+        await interaction.reply('Каналът се изтрива...');
+        return interaction.channel.delete();
       }
     }
-  }
-
-  if (interaction.isButton()) {
-    if (interaction.customId.startsWith('verify_')) {
-      const roleId = interaction.customId.split('_')[1];
-      const role = interaction.guild.roles.cache.get(roleId);
-      if (role) {
-        await interaction.member.roles.add(role);
-        return interaction.reply({ content: 'Успешна верификация!', ephemeral: true });
-      }
-    }
-
-    if (interaction.customId.startsWith('giveaway_')) {
-      const gId = interaction.customId.split('_')[1];
-      const list = activeGiveaways.get(gId);
-      if (list) {
-        if (list.includes(interaction.user.id)) {
-          return interaction.reply({ content: 'Вече участвате!', ephemeral: true });
-        }
-        list.push(interaction.user.id);
-        return interaction.reply({ content: 'Успешно се записахте за giveaway-а!', ephemeral: true });
-      }
-    }
-
-    if (interaction.customId === 'open_ticket_btn') {
-      const tChannel = await interaction.guild.channels.create({
-        name: `ticket-${interaction.user.username}`,
-        type: ChannelType.GuildText,
-        permissionOverwrites: [
-          { id: interaction.guild.id, deny: [PermissionsBitField.Flags.ViewChannel] },
-          { id: interaction.user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] }
-        ]
-      });
-      const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('close_ticket').setLabel('Затвори тикет').setStyle(ButtonStyle.Danger)
-      );
-      await tChannel.send({ content: `${interaction.user}, опишете вашия въпрос тук.`, components: [row] });
-      return interaction.reply({ content: `Тикетът е създаден: ${tChannel}`, ephemeral: true });
-    }
-
-    if (interaction.customId === 'close_ticket') {
-      await interaction.reply('Каналът се изтрива...');
-      return interaction.channel.delete();
-    }
+  } catch (error) {
+    console.error('Грешка при изпълнение на интеракция:', error);
   }
 });
 
 client.login(process.env.DISCORD_TOKEN);
-          
+                   
