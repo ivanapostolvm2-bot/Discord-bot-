@@ -1,33 +1,4 @@
-const express = require('express');
-const http = require('http');
-const fs = require('fs');
-const path = require('path');
-const { spawn } = require('child_process');
-
-const app = express();
-const server = http.createServer(app);
-const PORT = process.env.PORT || 3000;
-
-const CONFIG_FILE = path.join(__dirname, 'panel_config.json');
-const BOT_RUN_FILE = path.join(__dirname, 'bot_code.js');
-
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-
-let botProcess = null;
-let botStatus = 'Offline';
-let consoleLogs = [];
-
-function addLog(message) {
-    const timestamp = new Date().toLocaleTimeString('bg-BG');
-    const logLine = `[${timestamp}] ${message}`;
-    consoleLogs.push(logLine);
-    console.log(logLine);
-    if (consoleLogs.length > 100) consoleLogs.shift();
-}
-
-// 100% Валиден код на бота с фиксирани кавички и скоби
-const defaultBotCode = `const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, EmbedBuilder, PermissionFlagsBits, ChannelType, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, EmbedBuilder, PermissionFlagsBits, ChannelType, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
 
@@ -136,7 +107,7 @@ client.on('interactionCreate', async interaction => {
         await interaction.reply('📈 **' + user.username + '** даде **reb+** на **' + target.username + '**. Репутация: ' + r);
     }
     if (commandName === 'rules') {
-        await interaction.reply({ embeds: [new EmbedBuilder().setTitle('📜 ПРАВИЛА').setDescription('1. Спазвайте RP правилата.\\n2. Без токсичност.').setColor('#ff0000')] });
+        await interaction.reply({ embeds: [new EmbedBuilder().setTitle('📜 ПРАВИЛА').setDescription('1. Спазвайте RP правилата.\n2. Без токсичност.').setColor('#ff0000')] });
     }
     if (commandName === 'serverinfo') {
         await interaction.reply({ embeds: [new EmbedBuilder().setTitle(guild.name).setDescription('Общо членове: ' + guild.memberCount).setColor('#5865F2')] });
@@ -151,3 +122,16 @@ client.on('interactionCreate', async interaction => {
         const sub = options.getSubcommand();
         if (sub === 'setup') {
             const embed = new EmbedBuilder().setTitle('📩 Система за Тикети').setDescription('Натисни бутона, за да отвориш тикет към екипа.').setColor('#2ecc71');
+            const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('open_ticket').setLabel('Отвори Тикет').setStyle(ButtonStyle.Success));
+            await channel.send({ embeds: [embed], components: [row] });
+            await interaction.reply({ content: 'Панелът е генериран успешно.', ephemeral: true });
+        }
+        if (sub === 'close') {
+            if (!channel.name.startsWith('ticket-')) return interaction.reply('Не се намираш в тикет канал.');
+            await interaction.reply('🔒 Изтриване на канала...'); setTimeout(() => channel.delete().catch(() => {}), 5000);
+        }
+    }
+    if (commandName === 'warn') {
+        const sub = options.getSubcommand(); const target = options.getUser('потребител'); let data = getWarns();
+        if (sub === 'add') {
+            const reason = options.getString('причина'); if (!data[target.id]) data[target.id] = [];
