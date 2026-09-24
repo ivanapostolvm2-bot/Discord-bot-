@@ -1,358 +1,164 @@
+const express = require('express');
 const http = require('http');
+const fs = require('fs');
+const path = require('path');
+const { spawn } = require('child_process');
 
-// HTTP сървър за изискванията на Render Web Service
+const app = express();
+const server = http.createServer(app);
 const PORT = process.env.PORT || 3000;
-http.createServer((req, res) => {
-  res.writeHead(200, { 'Content-Type': 'text/plain' });
-  res.end('Bot is running and healthy!');
-}).listen(PORT, () => {
-  console.log(`HTTP сървърът слуша на порт ${PORT}`);
+
+// Файлове за запазване на конфигурацията
+const CONFIG_FILE = path.join(__dirname, 'panel_config.json');
+const BOT_RUN_FILE = path.join(__dirname, 'bot_code.js');
+
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+let botProcess = null;
+let botStatus = 'Offline';
+let consoleLogs = [];
+
+// Функция за добавяне на лог в конзолата на уебсайта
+function addLog(message) {
+    const timestamp = new Date().toLocaleTimeString('bg-BG');
+    const logLine = `[${timestamp}] ${message}`;
+    consoleLogs.push(logLine);
+    console.log(logLine); // Логва и в самия Render за всеки случай
+    if (consoleLogs.length > 100) consoleLogs.shift(); // Пази последните 100 реда лог
+}
+
+// Зареждане на запазения токен и код при стартиране на сървъра
+let savedData = { token: '', code: '// Постави твоя код тук...' };
+if (fs.existsSync(CONFIG_FILE)) {
+    try { savedData = JSON.parse(fs.readFileSync(CONFIG_FILE)); } catch (e) {}
+}
+
+// Главна уеб страница (Дизайнът от твоята снимка)
+app.get('/', (req, res) => {
+    const statusColor = botStatus === 'Online' ? '#2ecc71' : '#e74c3c';
+    const logsText = consoleLogs.length > 0 ? consoleLogs.join('\n') : 'Няма логове.';
+
+    res.send(`
+        <html>
+            <head>
+                <title>Управление на Discord Бот</title>
+                <meta charset="utf-8">
+                <style>
+                    body { font-family: 'Segoe UI', Arial, sans-serif; background-color: #0f1115; color: #ffffff; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }
+                    .container { background-color: #1a1d24; padding: 30px; border-radius: 8px; box-shadow: 0 4px 15px rgba(0,0,0,0.5); width: 100%; max-width: 650px; border: 1px solid #2d323f; }
+                    h2 { text-align: center; color: #5865F2; margin-top: 0; font-size: 24px; }
+                    .status-container { text-align: center; font-weight: bold; margin-bottom: 20px; font-size: 18px; }
+                    .status-dot { height: 12px; width: 12px; background-color: ${statusColor}; border-radius: 50%; display: inline-block; margin-left: 8px; }
+                    label { display: block; font-weight: bold; margin-bottom: 5px; font-size: 14px; color: #b9bbbe; }
+                    input[type="text"], textarea { width: 100%; padding: 12px; background-color: #202225; border: 1px solid #2f3136; border-radius: 5px; color: #dcddde; font-family: monospace; font-size: 14px; box-sizing: border-box; margin-bottom: 15px; resize: vertical; }
+                    input[type="text"]:focus, textarea:focus { border-color: #5865F2; outline: none; }
+                    .buttons { display: flex; gap: 15px; margin-bottom: 20px; }
+                    button { flex: 1; padding: 14px; font-size: 16px; font-weight: bold; border: none; border-radius: 5px; cursor: pointer; color: white; display: flex; align-items: center; justify-content: center; gap: 8px; transition: background 0.2s; }
+                    .btn-start { background-color: #2ecc71; }
+                    .btn-start:hover { background-color: #27ae60; }
+                    .btn-stop { background-color: #e74c3c; }
+                    .btn-stop:hover { background-color: #c0392b; }
+                    .console-title { font-weight: bold; color: #2ecc71; margin-bottom: 5px; font-size: 14px; }
+                    .console { background-color: #000000; border: 1px solid #2f3136; border-radius: 5px; padding: 15px; height: 180px; overflow-y: auto; font-family: 'Courier New', monospace; font-size: 13px; color: #2ecc71; white-space: pre-wrap; word-break: break-all; }
+                </style>
+                <script>
+                    // Автоматично превъртане на конзолата най-долу при зареждане
+                    window.onload = function() {
+                        var consoleDiv = document.getElementById("console");
+                        consoleDiv.scrollTop = consoleDiv.scrollHeight;
+                    };
+                </script>
+            </head>
+            <body>
+                <div class="container">
+                    <h2>Управление на Discord Бот</h2>
+                    <div class="status-container">
+                        Статус: <span style="color: ${statusColor}">${botStatus}</span><span class="status-dot"></span>
+                    </div>
+                    
+                    <form action="/action" method="POST">
+                        <label>Discord Token:</label>
+                        <input type="text" name="token" placeholder="Постави bot токена" value="${savedData.token}">
+                        
+                        <label>Код на бота (index.js):</label>
+                        <textarea name="code" rows="12" placeholder="Постави JavaScript кода...">${savedData.code}</textarea>
+                        
+                        <div class="buttons">
+                            <button type="submit" name="btn" value="start" class="btn-start">▶ Старт</button>
+                            <button type="submit" name="btn" value="stop" class="btn-stop">■ Стоп</button>
+                        </div>
+                    </form>
+                    
+                    <div class="console-title">Конзола (Грешки / Логове):</div>
+                    <div id="console" class="console">${logsText}</div>
+                </div>
+            </body>
+        </html>
+    `);
 });
 
-const { 
-  Client, 
-  GatewayIntentBits, 
-  Partials, 
-  Routes, 
-  REST, 
-  SlashCommandBuilder, 
-  PermissionFlagsBits, 
-  ActionRowBuilder, 
-  ButtonBuilder, 
-  ButtonStyle, 
-  ChannelType, 
-  PermissionsBitField,
-  EmbedBuilder,
-  Events
-} = require('discord.js');
+// Линкове за Бутоните Старт / Стоп
+app.post('/action', (req, res) => {
+    const { token, code, btn } = req.body;
 
-const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildMembers
-  ],
-  partials: [Partials.Message, Partials.Channel]
-});
+    // Запазваме въведените данни във файл, за да си стоят там
+    savedData = { token, code };
+    fs.writeFileSync(CONFIG_FILE, JSON.stringify(savedData, null, 2));
 
-const warnings = new Map();
-const activeGiveaways = new Map();
-let ticketChannelId = null;
+    if (btn === 'start') {
+        if (botStatus === 'Online') {
+            addLog("Ботът вече работи! Натисни първо Стоп, ако искаш да го рестартираш.");
+        } else if (!token.trim()) {
+            addLog("Грешка: Не може да стартирате бота без валиден Токен!");
+        } else {
+            addLog("Инициализиране и стартиране на бота...");
+            
+            // Записваме кода на самия бот в отделен файл, който ще стартираме
+            fs.writeFileSync(BOT_RUN_FILE, code);
 
-const commands = [
-  new SlashCommandBuilder().setName('ping').setDescription('Проверка на забавянето на бота'),
-  new SlashCommandBuilder().setName('about').setDescription('Информация за бота'),
-  new SlashCommandBuilder().setName('serverinfo').setDescription('Информация за сървъра'),
-  
-  new SlashCommandBuilder()
-    .setName('clear')
-    .setDescription('Изтрива определен брой съобщения')
-    .addIntegerOption(opt => opt.setName('amount').setDescription('Брой съобщения (1-100)').setRequired(true))
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages),
+            // Стартираме бота като отделен процес и му подаваме токена като Environment Variable
+            botProcess = spawn('node', [BOT_RUN_FILE], {
+                env: { ...process.env, DISCORD_TOKEN: token }
+            });
 
-  new SlashCommandBuilder()
-    .setName('embed')
-    .setDescription('Изпраща оформено съобщение')
-    .addStringOption(opt => opt.setName('title').setDescription('Заглавие').setRequired(true))
-    .addStringOption(opt => opt.setName('description').setDescription('Текст').setRequired(true))
-    .addStringOption(opt => opt.setName('color').setDescription('Цвят Hex (напр. #FF0000)'))
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages),
+            botStatus = 'Online';
 
-  new SlashCommandBuilder()
-    .setName('poll')
-    .setDescription('Създава анкета')
-    .addStringOption(opt => opt.setName('question').setDescription('Въпрос').setRequired(true))
-    .addStringOption(opt => opt.setName('option1').setDescription('Опция 1').setRequired(true))
-    .addStringOption(opt => opt.setName('option2').setDescription('Опция 2').setRequired(true)),
+            // Прихващане на нормалните лог съобщения от бота
+            botProcess.stdout.on('data', (data) => {
+                addLog(data.toString().trim());
+            });
 
-  new SlashCommandBuilder()
-    .setName('giveaway')
-    .setDescription('Стартира giveaway')
-    .addStringOption(opt => opt.setName('prize').setDescription('Награда').setRequired(true))
-    .addIntegerOption(opt => opt.setName('duration').setDescription('Време в минути').setRequired(true))
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
+            // Прихващане на грешки от кода на бота
+            botProcess.stderr.on('data', (data) => {
+                addLog(`ГРЕШКА: ${data.toString().trim()}`);
+            });
 
-  new SlashCommandBuilder()
-    .setName('setup-verify')
-    .setDescription('Изпраща панел за верификация')
-    .addRoleOption(opt => opt.setName('role').setDescription('Роля за даване').setRequired(true))
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
-
-  new SlashCommandBuilder()
-    .setName('ticket')
-    .setDescription('Управление на тикети')
-    .addSubcommand(sub => sub.setName('open').setDescription('Отвори тикет за помощ'))
-    .addSubcommand(sub => sub.setName('close').setDescription('Затвори текущия тикет'))
-    .addSubcommand(sub => sub.setName('setup').setDescription('Настройка на панел за тикети')),
-
-  new SlashCommandBuilder()
-    .setName('warn')
-    .setDescription('Система за предупреждения')
-    .addSubcommand(sub => 
-      sub.setName('add')
-        .setDescription('Предупреди потребител')
-        .addUserOption(opt => opt.setName('user').setDescription('Потребител').setRequired(true))
-        .addStringOption(opt => opt.setName('reason').setDescription('Причина').setRequired(true))
-    )
-    .addSubcommand(sub => 
-      sub.setName('list')
-        .setDescription('Покажи предупреждения')
-        .addUserOption(opt => opt.setName('user').setDescription('Потребител').setRequired(true))
-    )
-    .addSubcommand(sub => 
-      sub.setName('remove')
-        .setDescription('Изтрий предупреждение')
-        .addUserOption(opt => opt.setName('user').setDescription('Потребител').setRequired(true))
-        .addIntegerOption(opt => opt.setName('index').setDescription('Номер на предупреждение').setRequired(true))
-    )
-    .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers),
-
-  new SlashCommandBuilder()
-    .setName('set-ticket-channel')
-    .setDescription('Задава канал, в който се позволява само /ticket open')
-    .addChannelOption(opt => opt.setName('channel').setDescription('Избери канала').setRequired(true))
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-].map(c => c.toJSON());
-
-// Регистриране на команди при стартиране
-client.once(Events.ClientReady, async (c) => {
-  console.log(`Вписан успешно като: ${c.user.tag}`);
-  const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
-  try {
-    console.log('Започва обновяване на глобалните slash команди...');
-    await rest.put(Routes.applicationCommands(c.user.id), { body: commands });
-    console.log('Slash командите са регистрирани успешно!');
-  } catch (err) {
-    console.error('Грешка при регистриране на команди:', err);
-  }
-});
-
-// Защита на специалния канал срещу обикновени съобщения
-client.on(Events.MessageCreate, async (message) => {
-  if (message.author.bot || !ticketChannelId) return;
-  if (message.channel.id === ticketChannelId) {
-    try {
-      await message.delete();
-      const warnMsg = await message.channel.send({
-        content: `${message.author}, в този канал е забранен обикновеният чат! Използвайте само командата \`/ticket open\`.`
-      });
-      setTimeout(() => warnMsg.delete().catch(() => {}), 4000);
-    } catch (e) {
-      console.error('Грешка при изтриване на съобщение:', e);
-    }
-  }
-});
-
-// Обработка на взаимодействия (slash команди и бутони)
-client.on(Events.InteractionCreate, async (interaction) => {
-  try {
-    if (interaction.isChatInputCommand()) {
-      const { commandName, options, guild, member, channel } = interaction;
-
-      if (commandName === 'ping') {
-        return interaction.reply(`Pong! 🏓 Забавяне: ${client.ws.ping}ms`);
-      }
-
-      if (commandName === 'about') {
-        return interaction.reply({
-          embeds: [new EmbedBuilder().setTitle('За бота').setDescription('Многофункционален бот за управление на сървъра.').setColor(0x00AE86)]
-        });
-      }
-
-      if (commandName === 'serverinfo') {
-        return interaction.reply({
-          embeds: [
-            new EmbedBuilder()
-              .setTitle(guild.name)
-              .setThumbnail(guild.iconURL())
-              .addFields(
-                { name: 'Членове', value: `${guild.memberCount}`, inline: true },
-                { name: 'Канали', value: `${guild.channels.cache.size}`, inline: true },
-                { name: 'Роли', value: `${guild.roles.cache.size}`, inline: true }
-              )
-              .setColor(0x5865F2)
-          ]
-        });
-      }
-
-      if (commandName === 'clear') {
-        const amount = options.getInteger('amount');
-        if (amount < 1 || amount > 100) return interaction.reply({ content: 'Въведете число между 1 и 100.', ephemeral: true });
-        await channel.bulkDelete(amount, true);
-        return interaction.reply({ content: `Изтрити ${amount} съобщения.`, ephemeral: true });
-      }
-
-      if (commandName === 'embed') {
-        const title = options.getString('title');
-        const desc = options.getString('description');
-        const color = options.getString('color') || '#5865F2';
-        const embed = new EmbedBuilder().setTitle(title).setDescription(desc).setColor(color);
-        await channel.send({ embeds: [embed] });
-        return interaction.reply({ content: 'Embed съобщението е изпратено!', ephemeral: true });
-      }
-
-      if (commandName === 'poll') {
-        const q = options.getString('question');
-        const o1 = options.getString('option1');
-        const o2 = options.getString('option2');
-        const embed = new EmbedBuilder().setTitle(`📊 Анкета: ${q}`).setDescription(`1️⃣ ${o1}\n2️⃣ ${o2}`).setColor(0x00FF88);
-        const pollMsg = await channel.send({ embeds: [embed] });
-        await pollMsg.react('1️⃣');
-        await pollMsg.react('2️⃣');
-        return interaction.reply({ content: 'Анкетата е създадена!', ephemeral: true });
-      }
-
-      if (commandName === 'set-ticket-channel') {
-        const targetChan = options.getChannel('channel');
-        ticketChannelId = targetChan.id;
-        return interaction.reply({ content: `Каналът ${targetChan} вече приема само тикети. Обикновеният текст в него ще се трие автоматично!`, ephemeral: true });
-      }
-
-      if (commandName === 'setup-verify') {
-        const role = options.getRole('role');
-        const row = new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setCustomId(`verify_${role.id}`).setLabel('Потвърди').setStyle(ButtonStyle.Success)
-        );
-        const embed = new EmbedBuilder().setTitle('Верификация').setDescription('Натиснете бутона отдолу за достъп до сървъра.').setColor(0x57F287);
-        await channel.send({ embeds: [embed], components: [row] });
-        return interaction.reply({ content: 'Панелът за верификация е настроен!', ephemeral: true });
-      }
-
-      if (commandName === 'giveaway') {
-        const prize = options.getString('prize');
-        const mins = options.getInteger('duration');
-        const gId = `${Date.now()}`;
-        activeGiveaways.set(gId, []);
-
-        const row = new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setCustomId(`giveaway_${gId}`).setLabel('🎉 Участвай').setStyle(ButtonStyle.Primary)
-        );
-        const embed = new EmbedBuilder().setTitle(`🎉 Giveaway: ${prize}`).setDescription(`Натиснете бутона за участие!\nВреме: ${mins} мин.`).setColor(0xFEE75C);
-        await channel.send({ embeds: [embed], components: [row] });
-        await interaction.reply({ content: 'Giveaway е пуснат!', ephemeral: true });
-
-        setTimeout(async () => {
-          const entries = activeGiveaways.get(gId) || [];
-          if (entries.length === 0) {
-            await channel.send(`🎉 Giveaway за **${prize}** приключи! Няма участници.`);
-          } else {
-            const winnerId = entries[Math.floor(Math.random() * entries.length)];
-            await channel.send(`🎉 Честито на <@${winnerId}>! Печелиш **${prize}**!`);
-          }
-          activeGiveaways.delete(gId);
-        }, mins * 60000);
-      }
-
-      if (commandName === 'warn') {
-        const sub = options.getSubcommand();
-        const target = options.getUser('user');
-        if (!warnings.has(target.id)) warnings.set(target.id, []);
-
-        if (sub === 'add') {
-          const reason = options.getString('reason');
-          warnings.get(target.id).push(reason);
-          return interaction.reply({ content: `Предупреждение добавено на ${target.tag}: ${reason}` });
+            // Когато процесът на бота спре
+            botProcess.on('close', (code) => {
+                botStatus = 'Offline';
+                addLog(`Процесът на бота завърши с код: ${code}`);
+            });
         }
-        if (sub === 'list') {
-          const userWarns = warnings.get(target.id);
-          if (!userWarns.length) return interaction.reply({ content: `${target.tag} няма предупреждения.`, ephemeral: true });
-          return interaction.reply({ content: `Предупреждения за ${target.tag}:\n${userWarns.map((w, i) => `${i + 1}. ${w}`).join('\n')}` });
+    } 
+    
+    else if (btn === 'stop') {
+        if (botProcess) {
+            addLog("Спиране на бота от уеб контролния панел...");
+            botProcess.kill();
+            botProcess = null;
+            botStatus = 'Offline';
+        } else {
+            addLog("Ботът вече е спрян.");
         }
-        if (sub === 'remove') {
-          const idx = options.getInteger('index') - 1;
-          const userWarns = warnings.get(target.id);
-          if (idx >= 0 && idx < userWarns.length) {
-            userWarns.splice(idx, 1);
-            return interaction.reply({ content: `Предупреждението е премахнато.` });
-          }
-          return interaction.reply({ content: 'Невалиден номер на предупреждение.', ephemeral: true });
-        }
-      }
-
-      if (commandName === 'ticket') {
-        const sub = options.getSubcommand();
-        if (sub === 'open') {
-          const tChannel = await guild.channels.create({
-            name: `ticket-${member.user.username}`,
-            type: ChannelType.GuildText,
-            permissionOverwrites: [
-              { id: guild.id, deny: [PermissionsBitField.Flags.ViewChannel] },
-              { id: member.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] }
-            ]
-          });
-          const row = new ActionRowBuilder().addComponents(
-            new ButtonBuilder().setCustomId('close_ticket').setLabel('Затвори тикет').setStyle(ButtonStyle.Danger)
-          );
-          await tChannel.send({ content: `${member}, опишете вашия въпрос тук. Администратор ще ви отговори скоро.`, components: [row] });
-          return interaction.reply({ content: `Тикетът е създаден: ${tChannel}`, ephemeral: true });
-        }
-        if (sub === 'close') {
-          if (!channel.name.startsWith('ticket-')) return interaction.reply({ content: 'Тази команда може да се ползва само в канал за тикет!', ephemeral: true });
-          await interaction.reply('Тикетът ще бъде затворен след момент...');
-          return channel.delete();
-        }
-        if (sub === 'setup') {
-          const row = new ActionRowBuilder().addComponents(
-            new ButtonBuilder().setCustomId('open_ticket_btn').setLabel('📩 Отвори билет').setStyle(ButtonStyle.Primary)
-          );
-          const embed = new EmbedBuilder()
-            .setTitle('Център за помощ')
-            .setDescription('Ако имате въпрос или проблем, натиснете бутона по-долу, за да отворите частен тикет.')
-            .setColor(0x5865F2);
-          await channel.send({ embeds: [embed], components: [row] });
-          return interaction.reply({ content: 'Панелът за тикети е изпратен успешно!', ephemeral: true });
-        }
-      }
     }
 
-    if (interaction.isButton()) {
-      if (interaction.customId.startsWith('verify_')) {
-        const roleId = interaction.customId.split('_')[1];
-        const role = interaction.guild.roles.cache.get(roleId);
-        if (role) {
-          await interaction.member.roles.add(role);
-          return interaction.reply({ content: 'Успешна верификация!', ephemeral: true });
-        }
-      }
-
-      if (interaction.customId.startsWith('giveaway_')) {
-        const gId = interaction.customId.split('_')[1];
-        const list = activeGiveaways.get(gId);
-        if (list) {
-          if (list.includes(interaction.user.id)) {
-            return interaction.reply({ content: 'Вече участвате!', ephemeral: true });
-          }
-          list.push(interaction.user.id);
-          return interaction.reply({ content: 'Успешно се записахте за giveaway-а!', ephemeral: true });
-        }
-      }
-
-      if (interaction.customId === 'open_ticket_btn') {
-        const tChannel = await interaction.guild.channels.create({
-          name: `ticket-${interaction.user.username}`,
-          type: ChannelType.GuildText,
-          permissionOverwrites: [
-            { id: interaction.guild.id, deny: [PermissionsBitField.Flags.ViewChannel] },
-            { id: interaction.user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] }
-          ]
-        });
-        const row = new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setCustomId('close_ticket').setLabel('Затвори тикет').setStyle(ButtonStyle.Danger)
-        );
-        await tChannel.send({ content: `${interaction.user}, опишете вашия въпрос тук.`, components: [row] });
-        return interaction.reply({ content: `Тикетът е създаден: ${tChannel}`, ephemeral: true });
-      }
-
-      if (interaction.customId === 'close_ticket') {
-        await interaction.reply('Каналът се изтрива...');
-        return interaction.channel.delete();
-      }
-    }
-  } catch (error) {
-    console.error('Грешка при изпълнение на интеракция:', error);
-  }
+    // Връщаме потребителя обратно на същата страница, за да види обновения статус и логове
+    setTimeout(() => {
+        res.redirect('/');
+    }, 500);
 });
 
-client.login(process.env.DISCORD_TOKEN);
-                   
+server.listen(PORT, () => {
+    console.log(`Уеб панелът работи успешно на порт ${PORT}`);
+});
